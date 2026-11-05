@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyBaseLogger } from "fastify";
@@ -49,6 +49,8 @@ import { QpdfTimeoutError } from "@snapotter/doc-engine";
 import { logger } from "../../../apps/api/src/lib/logger.js";
 import {
   DocumentInputHandler,
+  findPdfHeaderOffset,
+  PDF_HEADER_SEARCH_BYTES,
   validatePdfPath,
 } from "../../../apps/api/src/modality/document-input.js";
 
@@ -114,6 +116,63 @@ describe("DocumentInputHandler password policy", () => {
     await expect(
       handler.prepare(Buffer.from("not a zip"), "report.docx", { scratchDir }),
     ).rejects.toThrow(/couldn't be opened as an Office or EPUB document/i);
+  });
+});
+
+describe("PDF header offset", () => {
+  // Some generators wrap the PDF in print-spool markers; readers accept a
+  // header anywhere in the first 1024 bytes.
+  const prefixed = Buffer.from("$BOP$%PDF-1.5 body\n%%EOF\n$EOP$");
+
+  it("finds the header within the first 1024 bytes only", () => {
+    expect(findPdfHeaderOffset(Buffer.from("%PDF-1.7"))).toBe(0);
+    expect(findPdfHeaderOffset(prefixed)).toBe(5);
+    const late = Buffer.concat([Buffer.alloc(PDF_HEADER_SEARCH_BYTES, 0x20), Buffer.from("%PDF-")]);
+    expect(findPdfHeaderOffset(late)).toBe(-1);
+  });
+
+  it("strips bytes before the header and validates the stripped file", async () => {
+    const handler = new DocumentInputHandler();
+    let validatedHead = "";
+    qpdf.requiresPassword.mockImplementationOnce(async (path: string) => {
+      validatedHead = readFileSync(path).subarray(0, 5).toString();
+      return true;
+    });
+
+    const result = await handler.prepare(prefixed, "statement.PDF", { scratchDir });
+
+    expect(result.buffer.toString()).toBe("%PDF-1.5 body\n%%EOF\n$EOP$");
+    expect(result.filename).toBe("statement.PDF");
+    expect(validatedHead).toBe("%PDF-");
+  });
+
+  it("strips the prefix on the lenient path too", async () => {
+    const handler = new DocumentInputHandler();
+
+    const result = await handler.prepare(prefixed, "statement.pdf", { scratchDir, lenient: true });
+
+    expect(result.buffer.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(qpdf.requiresPassword).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a header that starts past the first 1024 bytes", async () => {
+    const handler = new DocumentInputHandler();
+    const late = Buffer.concat([Buffer.alloc(PDF_HEADER_SEARCH_BYTES, 0x20), Buffer.from("%PDF-")]);
+
+    await expect(handler.prepare(late, "late.pdf", { scratchDir })).rejects.toThrow(
+      /missing PDF header/i,
+    );
+    expect(qpdf.requiresPassword).not.toHaveBeenCalled();
+  });
+
+  it("accepts a prefixed header on disk without rewriting the file", async () => {
+    const inputPath = join(scratchDir, "prefixed.pdf");
+    writeFileSync(inputPath, prefixed);
+
+    await expect(validatePdfPath(inputPath)).resolves.toBeUndefined();
+
+    expect(qpdf.requiresPassword).toHaveBeenCalledWith(inputPath);
+    expect(readFileSync(inputPath).equals(prefixed)).toBe(true);
   });
 });
 

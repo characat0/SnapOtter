@@ -17,6 +17,21 @@ import { type InputHandler, InputValidationError, type PreparedInput } from "./c
 
 const ZIP_MAGIC = Buffer.from("PK");
 
+const PDF_MAGIC = "%PDF-";
+
+/**
+ * How far into a file the %PDF- header may start. PDF readers (Acrobat,
+ * pdf.js, qpdf, mupdf) accept a header anywhere in the first 1024 bytes, and
+ * some generators emit a short prefix before it (e.g. print-spool markers
+ * like "$BOP$"). Matches the sniff in routes/tools/pdf-to-image.ts.
+ */
+export const PDF_HEADER_SEARCH_BYTES = 1024;
+
+/** Offset of the %PDF- header within the first PDF_HEADER_SEARCH_BYTES bytes, or -1. */
+export function findPdfHeaderOffset(buf: Buffer): number {
+  return buf.subarray(0, PDF_HEADER_SEARCH_BYTES).indexOf(PDF_MAGIC);
+}
+
 /** instanceof plus a name check, so a future dual copy of doc-engine cannot silently revert timeouts to "damaged". */
 function isQpdfTimeout(err: unknown): boolean {
   return (
@@ -74,14 +89,16 @@ export async function validatePdfPath(
   const handle = await open(filePath, "r");
   let failed = false;
   try {
-    const header = Buffer.alloc(5);
+    const header = Buffer.alloc(PDF_HEADER_SEARCH_BYTES);
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
     if (bytesRead === 0) {
       throw new InputValidationError(
         "This file is empty (0 bytes). Choose a valid file and try again.",
       );
     }
-    if (bytesRead < header.length || header.toString() !== "%PDF-") {
+    // Path-backed callers keep the file as-is: qpdf and the OCR engines it
+    // feeds accept a header offset just as PDF readers do.
+    if (findPdfHeaderOffset(header.subarray(0, bytesRead)) === -1) {
       throw new InputValidationError(
         "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
       );
@@ -207,15 +224,20 @@ export class DocumentInputHandler implements InputHandler {
         "This file is empty (0 bytes). Choose a valid file and try again.",
       );
     }
+    let buffer = raw;
     const lower = filename.toLowerCase();
     // PDF-only consumers set rejectPasswordProtected. Do not let a misleading
     // client filename bypass their PDF magic and structural validation.
     if (opts.rejectPasswordProtected || lower.endsWith(".pdf")) {
-      if (raw.subarray(0, 5).toString() !== "%PDF-") {
+      const headerOffset = findPdfHeaderOffset(raw);
+      if (headerOffset === -1) {
         throw new InputValidationError(
           "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
         );
       }
+      // Drop any bytes before the header so every downstream engine sees a
+      // file that starts with %PDF-, including ones stricter than qpdf.
+      if (headerOffset > 0) buffer = raw.subarray(headerOffset);
       // When lenient, skip qpdfCheck + page-cap (repair-pdf's input is
       // intentionally damaged). The %PDF- header check above still runs.
       if (!opts.lenient && qpdfAvailable()) {
@@ -224,7 +246,7 @@ export class DocumentInputHandler implements InputHandler {
         const p = join(dir, "input.pdf");
         try {
           opts.signal?.throwIfAborted();
-          await writeFile(p, raw, { signal: opts.signal });
+          await writeFile(p, buffer, { signal: opts.signal });
           await validatePdfPath(p, opts);
         } catch (err) {
           opts.signal?.throwIfAborted();
@@ -242,6 +264,6 @@ export class DocumentInputHandler implements InputHandler {
         );
       }
     }
-    return { buffer: raw, filename };
+    return { buffer, filename };
   }
 }
