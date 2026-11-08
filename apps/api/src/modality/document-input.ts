@@ -91,8 +91,6 @@ export async function validatePdfPath(
         "This file is empty (0 bytes). Choose a valid file and try again.",
       );
     }
-    // Path-backed callers keep the file as-is: qpdf and the OCR engines it
-    // feeds accept a header offset just as PDF readers do.
     if (findPdfHeaderOffset(header.subarray(0, bytesRead)) === -1) {
       throw new InputValidationError(
         "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
@@ -219,20 +217,17 @@ export class DocumentInputHandler implements InputHandler {
         "This file is empty (0 bytes). Choose a valid file and try again.",
       );
     }
-    let buffer = raw;
     const lower = filename.toLowerCase();
     // PDF-only consumers set rejectPasswordProtected. Do not let a misleading
     // client filename bypass their PDF magic and structural validation.
     if (opts.rejectPasswordProtected || lower.endsWith(".pdf")) {
-      const headerOffset = findPdfHeaderOffset(raw);
-      if (headerOffset === -1) {
+      // The file is passed on unchanged: qpdf and PDF readers treat the
+      // header as the start of the file, and its byte offsets count from it.
+      if (findPdfHeaderOffset(raw) === -1) {
         throw new InputValidationError(
           "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
         );
       }
-      // Drop any bytes before the header so every downstream engine sees a
-      // file that starts with %PDF-, including ones stricter than qpdf.
-      if (headerOffset > 0) buffer = raw.subarray(headerOffset);
       // When lenient, skip qpdfCheck + page-cap (repair-pdf's input is
       // intentionally damaged). The %PDF- header check above still runs.
       if (!opts.lenient && qpdfAvailable()) {
@@ -241,7 +236,7 @@ export class DocumentInputHandler implements InputHandler {
         const p = join(dir, "input.pdf");
         try {
           opts.signal?.throwIfAborted();
-          await writeFile(p, buffer, { signal: opts.signal });
+          await writeFile(p, raw, { signal: opts.signal });
           await validatePdfPath(p, opts);
         } catch (err) {
           opts.signal?.throwIfAborted();
@@ -259,6 +254,6 @@ export class DocumentInputHandler implements InputHandler {
         );
       }
     }
-    return { buffer, filename };
+    return { buffer: raw, filename };
   }
 }

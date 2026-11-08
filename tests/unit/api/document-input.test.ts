@@ -131,27 +131,27 @@ describe("PDF header offset", () => {
     expect(findPdfHeaderOffset(late)).toBe(-1);
   });
 
-  it("strips bytes before the header and validates the stripped file", async () => {
+  it("accepts a prefixed header and validates and returns the file unchanged", async () => {
     const handler = new DocumentInputHandler();
-    let validatedHead = "";
+    let validated: Buffer | undefined;
     qpdf.requiresPassword.mockImplementationOnce(async (path: string) => {
-      validatedHead = readFileSync(path).subarray(0, 5).toString();
-      return true;
+      validated = readFileSync(path);
+      return false;
     });
 
     const result = await handler.prepare(prefixed, "statement.PDF", { scratchDir });
 
-    expect(result.buffer.toString()).toBe("%PDF-1.5 body\n%%EOF\n$EOP$");
+    expect(result.buffer).toBe(prefixed);
     expect(result.filename).toBe("statement.PDF");
-    expect(validatedHead).toBe("%PDF-");
+    expect(validated?.equals(prefixed)).toBe(true);
   });
 
-  it("strips the prefix on the lenient path too", async () => {
+  it("leaves the prefix in place on the lenient path too", async () => {
     const handler = new DocumentInputHandler();
 
     const result = await handler.prepare(prefixed, "statement.pdf", { scratchDir, lenient: true });
 
-    expect(result.buffer.subarray(0, 5).toString()).toBe("%PDF-");
+    expect(result.buffer).toBe(prefixed);
     expect(qpdf.requiresPassword).not.toHaveBeenCalled();
   });
 
