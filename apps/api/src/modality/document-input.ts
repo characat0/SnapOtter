@@ -19,12 +19,7 @@ const ZIP_MAGIC = Buffer.from("PK");
 
 const PDF_MAGIC = "%PDF-";
 
-/**
- * How far into a file the %PDF- header may start. PDF readers (Acrobat,
- * pdf.js, qpdf, mupdf) accept a header anywhere in the first 1024 bytes, and
- * some generators emit a short prefix before it (e.g. print-spool markers
- * like "$BOP$"). Matches the sniff in routes/tools/pdf-to-image.ts.
- */
+/** How far into a file the %PDF- header may start. */
 export const PDF_HEADER_SEARCH_BYTES = 1024;
 
 /** Offset of the %PDF- header within the first PDF_HEADER_SEARCH_BYTES bytes, or -1. */
