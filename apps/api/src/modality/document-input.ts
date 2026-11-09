@@ -17,6 +17,16 @@ import { type InputHandler, InputValidationError, type PreparedInput } from "./c
 
 const ZIP_MAGIC = Buffer.from("PK");
 
+const PDF_MAGIC = "%PDF-";
+
+/** How far into a file the %PDF- header may start. */
+export const PDF_HEADER_SEARCH_BYTES = 1024;
+
+/** Offset of the %PDF- header within the first PDF_HEADER_SEARCH_BYTES bytes, or -1. */
+export function findPdfHeaderOffset(buf: Buffer): number {
+  return buf.subarray(0, PDF_HEADER_SEARCH_BYTES).indexOf(PDF_MAGIC);
+}
+
 /** instanceof plus a name check, so a future dual copy of doc-engine cannot silently revert timeouts to "damaged". */
 function isQpdfTimeout(err: unknown): boolean {
   return (
@@ -74,14 +84,14 @@ export async function validatePdfPath(
   const handle = await open(filePath, "r");
   let failed = false;
   try {
-    const header = Buffer.alloc(5);
+    const header = Buffer.alloc(PDF_HEADER_SEARCH_BYTES);
     const { bytesRead } = await handle.read(header, 0, header.length, 0);
     if (bytesRead === 0) {
       throw new InputValidationError(
         "This file is empty (0 bytes). Choose a valid file and try again.",
       );
     }
-    if (bytesRead < header.length || header.toString() !== "%PDF-") {
+    if (findPdfHeaderOffset(header.subarray(0, bytesRead)) === -1) {
       throw new InputValidationError(
         "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
       );
@@ -211,7 +221,7 @@ export class DocumentInputHandler implements InputHandler {
     // PDF-only consumers set rejectPasswordProtected. Do not let a misleading
     // client filename bypass their PDF magic and structural validation.
     if (opts.rejectPasswordProtected || lower.endsWith(".pdf")) {
-      if (raw.subarray(0, 5).toString() !== "%PDF-") {
+      if (findPdfHeaderOffset(raw) === -1) {
         throw new InputValidationError(
           "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
         );
