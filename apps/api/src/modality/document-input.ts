@@ -221,8 +221,6 @@ export class DocumentInputHandler implements InputHandler {
     // PDF-only consumers set rejectPasswordProtected. Do not let a misleading
     // client filename bypass their PDF magic and structural validation.
     if (opts.rejectPasswordProtected || lower.endsWith(".pdf")) {
-      // The file is passed on unchanged: qpdf and PDF readers treat the
-      // header as the start of the file, and its byte offsets count from it.
       if (findPdfHeaderOffset(raw) === -1) {
         throw new InputValidationError(
           "This file isn't a valid PDF (missing PDF header). Choose a valid PDF file and try again.",
